@@ -1,0 +1,8 @@
+../Core/Src/semaphore.c:13:20:crit_enter	1
+../Core/Src/semaphore.c:18:20:crit_exit	1
+../Core/Src/semaphore.c:40:9:bin_sem_try_take	2
+../Core/Src/semaphore.c:57:6:bin_sem_give	1
+../Core/Src/semaphore.c:68:9:bin_sem_is_taken	1
+../Core/Src/semaphore.c:88:6:timed_sem_lock_ms	1
+../Core/Src/semaphore.c:98:9:timed_sem_is_locked	1
+../Core/Src/semaphore.c:106:6:timed_sem_tick_1ms	2
