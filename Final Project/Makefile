@@ -1,117 +1,94 @@
-######################################
-# Project
-######################################
-TARGET = firmware
-BUILD  = build
+################################################################################
+# Automatically-generated file. Do not edit!
+# Toolchain: GNU Tools for STM32 (13.3.rel1)
+################################################################################
 
-######################################
-# MCU
-######################################
-MCU        = cortex-m4
-FPU        = -mfpu=fpv4-sp-d16
-FLOAT_ABI  = -mfloat-abi=hard
-MCU_DEF    = STM32F411xE
+-include ../makefile.init
 
-######################################
-# Toolchain
-######################################
-CC = arm-none-eabi-gcc
-AS = arm-none-eabi-gcc
-CP = arm-none-eabi-objcopy
-SZ = arm-none-eabi-size
+RM := rm -rf
 
-######################################
-# Paths
-######################################
-CORE     = Core
-DRIVERS  = Drivers
-STARTUP  = $(CORE)/Startup
+# All of the sources participating in the build are defined here
+-include sources.mk
+-include Drivers/STM32F4xx_HAL_Driver/Src/subdir.mk
+-include Core/Startup/subdir.mk
+-include Core/Src/subdir.mk
+-include objects.mk
 
-######################################
-# Source files
-######################################
-C_SOURCES = \
-$(CORE)/Src/main.c \
-$(CORE)/Src/app.c \
-$(CORE)/Src/stm32f4xx_it.c \
-$(CORE)/Src/stm32f4xx_hal_msp.c \
-$(CORE)/Src/system_stm32f4xx.c \
-$(CORE)/Src/syscalls.c \
-$(CORE)/Src/sysmem.c \
-$(wildcard $(DRIVERS)/STM32F4xx_HAL_Driver/Src/*.c)
-
-ASM_SOURCES = \
-$(STARTUP)/startup_stm32f411retx.s
-
-######################################
-# Includes
-######################################
-C_INCLUDES = \
--I$(CORE)/Inc \
--I$(DRIVERS)/STM32F4xx_HAL_Driver/Inc \
--I$(DRIVERS)/STM32F4xx_HAL_Driver/Inc/Legacy \
--I$(DRIVERS)/CMSIS/Device/ST/STM32F4xx/Include \
--I$(DRIVERS)/CMSIS/Include
-
-######################################
-# Flags
-######################################
-CFLAGS  = -mcpu=$(MCU) -mthumb $(FPU) $(FLOAT_ABI)
-CFLAGS += -O2 -Wall -ffunction-sections -fdata-sections
-CFLAGS += -D$(MCU_DEF)
-CFLAGS += $(C_INCLUDES)
-
-ASFLAGS = $(CFLAGS)
-
-LDFLAGS  = -TSTM32F411RETX_FLASH.ld
-LDFLAGS += -mcpu=$(MCU) -mthumb $(FPU) $(FLOAT_ABI)
-LDFLAGS += -Wl,--gc-sections
-
-######################################
-# Windows/Linux helpers
-######################################
-ifeq ($(OS),Windows_NT)
-RM_BUILD    = powershell -NoProfile -Command "if (Test-Path '$(BUILD)') { Remove-Item -Recurse -Force '$(BUILD)' }"
-MKDIR_BUILD = powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$(BUILD)' | Out-Null"
-else
-RM_BUILD    = rm -rf $(BUILD)
-MKDIR_BUILD = mkdir -p $(BUILD)
+ifneq ($(MAKECMDGOALS),clean)
+ifneq ($(strip $(S_DEPS)),)
+-include $(S_DEPS)
+endif
+ifneq ($(strip $(S_UPPER_DEPS)),)
+-include $(S_UPPER_DEPS)
+endif
+ifneq ($(strip $(C_DEPS)),)
+-include $(C_DEPS)
+endif
 endif
 
-######################################
-# Build rules
-######################################
-OBJECTS = \
-$(addprefix $(BUILD)/, $(notdir $(C_SOURCES:.c=.o))) \
-$(addprefix $(BUILD)/, $(notdir $(ASM_SOURCES:.s=.o)))
+-include ../makefile.defs
 
-vpath %.c $(sort $(dir $(C_SOURCES)))
-vpath %.s $(sort $(dir $(ASM_SOURCES)))
+OPTIONAL_TOOL_DEPS := \
+$(wildcard ../makefile.defs) \
+$(wildcard ../makefile.init) \
+$(wildcard ../makefile.targets) \
 
-all: $(BUILD)/$(TARGET).elf hex bin
 
-$(BUILD):
-	$(MKDIR_BUILD)
+BUILD_ARTIFACT_NAME := Final
+BUILD_ARTIFACT_EXTENSION := elf
+BUILD_ARTIFACT_PREFIX :=
+BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
-$(BUILD)/%.o: %.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+# Add inputs and outputs from these tool invocations to the build variables 
+EXECUTABLES += \
+Final.elf \
 
-$(BUILD)/%.o: %.s | $(BUILD)
-	$(AS) $(ASFLAGS) -c $< -o $@
+MAP_FILES += \
+Final.map \
 
-$(BUILD)/$(TARGET).elf: $(OBJECTS)
-	$(CC) $^ $(LDFLAGS) -o $@
-	$(SZ) $@
+SIZE_OUTPUT += \
+default.size.stdout \
 
-hex: $(BUILD)/$(TARGET).elf
-	$(CP) -O ihex $< $(BUILD)/$(TARGET).hex
+OBJDUMP_LIST += \
+Final.list \
 
-bin: $(BUILD)/$(TARGET).elf
-	$(CP) -O binary $< $(BUILD)/$(TARGET).bin
 
+# All Target
+all: main-build
+
+# Main-build Target
+main-build: Final.elf secondary-outputs
+
+# Tool invocations
+Final.elf Final.map: $(OBJS) $(USER_OBJS) H:\LUT-\ Hesam\Embedded\ Systems\embedded_systems_uniProject\Final\ Project\new\Final\ Project\STM32F411RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Final.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"H:\LUT- Hesam\Embedded Systems\embedded_systems_uniProject\Final Project\new\Final Project\STM32F411RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Final.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	@echo 'Finished building target: $@'
+	@echo ' '
+
+default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-size  $(EXECUTABLES)
+	@echo 'Finished building: $@'
+	@echo ' '
+
+Final.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "Final.list"
+	@echo 'Finished building: $@'
+	@echo ' '
+
+# Other Targets
 clean:
-	$(RM_BUILD)
+	-$(RM) Final.elf Final.list Final.map default.size.stdout
+	-@echo ' '
 
-######################################
-# END
-######################################
+secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)
+
+fail-specified-linker-script-missing:
+	@echo 'Error: Cannot find the specified linker script. Check the linker settings in the build configuration.'
+	@exit 2
+
+warn-no-linker-script-specified:
+	@echo 'Warning: No linker script specified. Check the linker settings in the build configuration.'
+
+.PHONY: all clean dependents main-build fail-specified-linker-script-missing warn-no-linker-script-specified
+
+-include ../makefile.targets

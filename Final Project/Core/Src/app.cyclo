@@ -1,0 +1,13 @@
+../Core/Src/app.c:47:12:finite_f	4
+../Core/Src/app.c:54:14:clamp01	3
+../Core/Src/app.c:62:13:uart_print	1
+../Core/Src/app.c:66:13:uart_println	1
+../Core/Src/app.c:73:13:pwm_set	1
+../Core/Src/app.c:81:13:reset_control	2
+../Core/Src/app.c:93:14:plant_step	13
+../Core/Src/app.c:128:14:pi_step	11
+../Core/Src/app.c:163:13:mode_str	5
+../Core/Src/app.c:173:6:app_init	1
+../Core/Src/app.c:180:6:app_tick_1khz	14
+../Core/Src/app.c:236:6:app_button_event	4
+../Core/Src/app.c:262:6:app_cli_process_line	21
