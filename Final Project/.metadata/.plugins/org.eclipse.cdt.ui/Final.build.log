@@ -1,10 +1,17 @@
-22:19:28 **** Incremental Build of configuration Debug for project Final ****
+04:39:35 **** Incremental Build of configuration Debug for project Final ****
 make -j12 all 
+arm-none-eabi-gcc "../Core/Src/app.c" -mcpu=cortex-m4 -std=gnu11 -g -DDEBUG -DUSE_HAL_DRIVER -DSTM32F411xE -c -I../Core/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/app.d" -MT"Core/Src/app.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/app.o"
+arm-none-eabi-gcc -o "Final.elf" @"objects.list"   -mcpu=cortex-m4 -T"H:\LUT- Hesam\Embedded Systems\embedded_systems_uniProject\Final Project\Debug\Final\STM32F411RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Final.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: Final.elf
+ 
 arm-none-eabi-size  Final.elf 
+arm-none-eabi-objdump -h -S Final.elf  > "Final.list"
    text	   data	    bss	    dec	    hex	filename
-  47576	    496	   2368	  50440	   c508	Final.elf
+  48368	    496	   2376	  51240	   c828	Final.elf
 Finished building: default.size.stdout
  
+Finished building: Final.list
+ 
 
-22:19:28 Build Finished. 0 errors, 0 warnings. (took 510ms)
+04:39:36 Build Finished. 0 errors, 0 warnings. (took 678ms)
 

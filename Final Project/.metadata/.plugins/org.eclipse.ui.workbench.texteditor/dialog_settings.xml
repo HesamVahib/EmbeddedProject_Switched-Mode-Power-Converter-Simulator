@@ -3,6 +3,14 @@
 	<item key="hasShownOverlayPopupBefore" value="true"/>
 	<item key="replaceBarOpen" value="false"/>
 	<list key="searchhistory">
+		<item value="app_button_event()"/>
+		<item value="if (g_mode == MODE_IDLE)"/>
+		<item value="reset_control();"/>
+		<item value="g_kp = (float)atof(arg); g_i = 0.0f; uart_println(&quot;OK kp&quot;); return;"/>
+		<item value="if (strncmp(line, &quot;mode&quot;, 4) == 0)"/>
+		<item value="app_cli"/>
+		<item value="uart_prin"/>
+		<item value="app_tick"/>
 		<item value="GPIOB"/>
 		<item value="GPIO_PIN_8"/>
 		<item value="GPIO_PIN_6"/>
@@ -10,13 +18,5 @@
 		<item value="ref = "/>
 		<item value="ref = sin(2 * pi * 50 * t);"/>
 		<item value="app_init"/>
-		<item value="ki step"/>
-		<item value="scan_inc"/>
-		<item value="void app_tick_1khz(void)"/>
-		<item value="app_tick_1khz()"/>
-		<item value="HAL_UART_RxCpltCallback"/>
-		<item value="HAL_UART_RxCpltCallback()"/>
-		<item value="status"/>
-		<item value="app_b"/>
 	</list>
 </section>

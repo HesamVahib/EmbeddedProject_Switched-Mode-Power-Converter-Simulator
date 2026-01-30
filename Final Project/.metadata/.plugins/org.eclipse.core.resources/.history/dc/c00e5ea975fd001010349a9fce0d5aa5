@@ -1,0 +1,588 @@
+/* =========================
+ * app.c  (all application logic)
+ * - Robust button handling (consistent INC/DEC/SELECT in CONFIG)
+ * - Bonus 1 (sin reference)
+ * - Bonus 2 (PWM-driven plant input: +1/0/-1 from TIM2 ISR)
+ *
+ * LEDs (simple, 3 only):
+ *   IDLE   -> all OFF
+ *   MOD    -> PA6 ON
+ *   CONFIG -> PA7 ON
+ * (No extra LEDs / no overrides)
+ * ========================= */
+
+#include "app.h"
+#include "main.h"
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+/* HAL handles are defined in main.c */
+extern TIM_HandleTypeDef  htim2;
+extern UART_HandleTypeDef huart2;
+
+/* ===== App state ===== */
+volatile mode_t  g_mode = MODE_IDLE;
+volatile uint8_t g_uart_config_lock = 0;
+
+/* Signals */
+volatile float g_ref    = 0.50f;  /* 0..1 reference shown in status */
+volatile float g_uin    = 0.00f;  /* 0..1 (PWM duty) */
+volatile float g_uout   = 0.00f;  /* plant output raw */
+volatile float g_meas01 = 0.00f;  /* 0..1 filtered measurement */
+
+/* PI */
+volatile float g_kp = 0.50f;
+volatile float g_ki = 30.0f;
+volatile float g_i  = 0.00f;
+
+static float   g_meas_f = 0.00f;
+static uint8_t g_sel_param = 0; /* 0=KP, 1=KI */
+
+/* ===== Bonus 1: inverter ref generator ===== */
+static volatile uint8_t g_bonus1_inverter = 0;  /* 0=off, 1=on */
+static volatile float   g_inv_freq_hz = 50.0f;  /* Hz */
+static volatile float   g_inv_amp01   = 0.45f;  /* 0..0.49 */
+static float            g_inv_phase   = 0.0f;   /* rad */
+
+/* ===== Bonus 2: PWM-driven model input ===== */
+static volatile uint8_t g_bonus2_pwm_model = 0; /* 0=off, 1=on */
+static volatile int8_t  g_pwm_polarity = +1;    /* +1 or -1 */
+static volatile int8_t  g_upwm_state = 0;       /* -1, 0, +1 */
+
+/* ===== Plant (given Ad,Bd) + state ===== */
+static float xplant[6] = {0};
+
+static const float A[6][6] = {
+  { 0.9652f, -0.0172f,  0.0057f, -0.0058f,  0.0052f, -0.0251f },
+  { 0.7732f,  0.1252f,  0.2315f,  0.0700f,  0.1282f,  0.7754f },
+  { 0.8278f, -0.7522f, -0.0956f,  0.3299f, -0.4855f,  0.3915f },
+  { 0.9948f,  0.2655f, -0.3848f,  0.4212f,  0.3927f,  0.2899f },
+  { 0.7648f, -0.4165f, -0.4855f, -0.3366f, -0.0986f,  0.7281f },
+  { 1.1056f,  0.7587f, -0.1179f,  0.0748f, -0.2192f,  0.1491f },
+};
+static const float B[6] = { 0.0471f, 0.0377f, 0.0404f, 0.0485f, 0.0373f, 0.0539f };
+
+/* ===== helpers ===== */
+static int finite_f(float v)
+{
+  if (v != v) return 0;                  /* NaN */
+  if (v > 1e30f || v < -1e30f) return 0; /* Inf-ish */
+  return 1;
+}
+
+static float clamp01(float x)
+{
+  if (x < 0.0f) return 0.0f;
+  if (x > 1.0f) return 1.0f;
+  return x;
+}
+
+/* UART prints */
+static void uart_print(const char *s)
+{
+  HAL_UART_Transmit(&huart2, (uint8_t*)s, (uint16_t)strlen(s), 200);
+}
+static void uart_println(const char *s)
+{
+  uart_print(s);
+  uart_print("\r\n");
+}
+
+/* PWM wrapper */
+static void pwm_set(float duty01)
+{
+  duty01 = clamp01(duty01);
+  uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim2);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (uint32_t)(duty01 * (float)(arr + 1U)));
+}
+
+/* Mode LEDs: PA6 (MOD), PA7 (CONFIG). IDLE = both off. */
+static void leds_update_from_mode(void)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6,
+                    (g_mode == MODE_MOD) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7,
+                    (g_mode == MODE_CONFIG) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* Reset control + plant */
+static void reset_control(void)
+{
+  g_i = 0.0f;
+  g_uin  = 0.0f;
+  g_uout = 0.0f;
+  g_meas_f = 0.0f;
+  g_meas01 = 0.0f;
+  for (int k = 0; k < 6; k++) xplant[k] = 0.0f;
+
+  g_inv_phase = 0.0f;
+  g_pwm_polarity = +1;
+  g_upwm_state = 0;
+}
+
+/* Plant step */
+static float plant_step(float uin)
+{
+  float xn[6];
+
+  for (int r = 0; r < 6; r++)
+  {
+    float sum = 0.0f;
+    for (int c = 0; c < 6; c++) sum += A[r][c] * xplant[c];
+    sum += B[r] * uin;
+    xn[r] = sum;
+  }
+
+  for (int i = 0; i < 6; i++)
+  {
+    if (!finite_f(xn[i]) || xn[i] > STATE_LIMIT || xn[i] < -STATE_LIMIT)
+    {
+      for (int k = 0; k < 6; k++) xplant[k] = 0.0f;
+      return 0.0f;
+    }
+  }
+
+  for (int i = 0; i < 6; i++) xplant[i] = xn[i];
+
+  float y = xplant[5];
+  if (!finite_f(y) || y > Y_LIMIT || y < -Y_LIMIT)
+  {
+    for (int k = 0; k < 6; k++) xplant[k] = 0.0f;
+    return 0.0f;
+  }
+  return y;
+}
+
+/* PI step (anti-windup) */
+static float pi_step(float ref, float meas01)
+{
+  float e  = ref - meas01;
+  float up = g_kp * e;
+
+  float ui_new = g_i + (g_ki * TS_SEC) * e;
+  float u_try  = up + ui_new;
+
+  /* conditional integration */
+  if ((u_try < 1.0f && u_try > 0.0f) ||
+      (u_try >= 1.0f && e < 0.0f) ||
+      (u_try <= 0.0f && e > 0.0f))
+  {
+    g_i = ui_new;
+  }
+
+  float u = up + g_i;
+  if (u > 1.0f) u = 1.0f;
+  if (u < 0.0f) u = 0.0f;
+  return u;
+}
+
+/* Bonus 1: sine mapped to 0..1 */
+static float inv_ref_step_01(void)
+{
+  const float TWO_PI = 6.283185307f;
+
+  float f = g_inv_freq_hz;
+  if (f < 0.1f) f = 0.1f;
+  if (f > 200.0f) f = 200.0f;
+
+  float a = g_inv_amp01;
+  if (a < 0.0f) a = 0.0f;
+  if (a > 0.49f) a = 0.49f;
+
+  g_inv_phase += TWO_PI * f * TS_SEC;
+  if (g_inv_phase >= TWO_PI) g_inv_phase -= TWO_PI;
+
+  float s = sinf(g_inv_phase);
+  return clamp01(0.5f + a * s);
+}
+
+const char* mode_str(mode_t m)
+{
+  switch (m) {
+    case MODE_CONFIG: return "CONFIG";
+    case MODE_IDLE:   return "IDLE";
+    case MODE_MOD:    return "MOD";
+    default:          return "?";
+  }
+}
+
+/* =========================================================
+ * Robust button handling (consistent)
+ * Assumes: buttons are ACTIVE-LOW with Pull-Up.
+ * Debounce: integrator method, 10ms default.
+ * ========================================================= */
+typedef struct {
+  GPIO_TypeDef *port;
+  uint16_t      pin;
+
+  uint8_t stable;      /* debounced stable level: 1=not pressed, 0=pressed */
+  uint8_t last_stable;
+  uint8_t integrator;  /* 0..DEB_MAX */
+} btn_t;
+
+#define BTN_DEB_MS   10u   /* feel free to use 8..15 */
+#define BTN_DEB_MAX  BTN_DEB_MS
+
+static void btn_init(btn_t *b, GPIO_TypeDef *port, uint16_t pin)
+{
+  b->port = port;
+  b->pin  = pin;
+  b->stable = 1;
+  b->last_stable = 1;
+  b->integrator = 0;
+}
+
+/* returns 1 exactly once per PRESS (falling edge to stable=0) */
+static uint8_t btn_update_press_event(btn_t *b)
+{
+  uint8_t raw = (HAL_GPIO_ReadPin(b->port, b->pin) != GPIO_PIN_RESET); /* 1=high */
+  /* active-low button: pressed => raw==0 */
+  uint8_t raw_level = raw; /* 1=idle, 0=pressed */
+
+  /* integrator debounce */
+  if (raw_level == 0) {
+    if (b->integrator < BTN_DEB_MAX) b->integrator++;
+  } else {
+    if (b->integrator > 0) b->integrator--;
+  }
+
+  if (b->integrator == 0)         b->stable = 1;
+  else if (b->integrator >= BTN_DEB_MAX) b->stable = 0;
+
+  uint8_t event = 0;
+  if (b->stable != b->last_stable) {
+    /* detect press */
+    if (b->last_stable == 1 && b->stable == 0) event = 1;
+    b->last_stable = b->stable;
+  }
+  return event;
+}
+
+/* Buttons */
+static btn_t btn_mode;    /* PA0 */
+static btn_t btn_inc;     /* PA1 */
+static btn_t btn_dec;     /* PB0 */
+static btn_t btn_select;  /* PA4 */
+
+/* ===== button actions ===== */
+
+static void step_ref_or_gain(float d)
+{
+  if (g_mode == MODE_MOD)
+  {
+    if (g_bonus1_inverter) return; /* optional: ignore buttons in sine mode */
+
+    g_ref = clamp01(g_ref + d);
+    g_i = 0.0f;
+
+    uart_println(d > 0 ? "REF increase" : "REF decrease");
+    return;
+  }
+
+  if (g_mode == MODE_CONFIG)
+  {
+    if (g_sel_param == 0)
+    {
+      /* KP selected */
+      g_kp += d;
+      if (g_kp < 0.0f) g_kp = 0.0f;
+
+      uart_println(d > 0 ? "KP increase" : "KP decrease");
+    }
+    else
+    {
+      /* KI selected */
+      g_ki += 50.0f * d;
+      if (g_ki < 0.0f) g_ki = 0.0f;
+
+      uart_println(d > 0 ? "KI increase" : "KI decrease");
+    }
+
+    g_i = 0.0f;
+  }
+}
+
+/* ===== Bonus 2 ISR entry points (called from main.c TIM2 callbacks) ===== */
+void app_pwm_period_start(void)
+{
+  if (g_bonus2_pwm_model && (g_mode == MODE_MOD))
+  {
+    g_upwm_state = g_pwm_polarity;         /* +/-1 */
+    g_uout = plant_step((float)g_upwm_state);
+  }
+}
+
+void app_pwm_pulse_end(void)
+{
+  if (g_bonus2_pwm_model && (g_mode == MODE_MOD))
+  {
+    g_upwm_state = 0;                      /* 0 */
+    g_uout = plant_step(0.0f);
+  }
+}
+
+/* ===== public ===== */
+void app_init(void)
+{
+  reset_control();
+  g_mode = MODE_IDLE;
+  g_uart_config_lock = 0;
+
+  /* init buttons (active-low pullups) */
+  btn_init(&btn_mode,   GPIOA, GPIO_PIN_0);
+  btn_init(&btn_inc,    GPIOA, GPIO_PIN_1);
+  btn_init(&btn_dec,    GPIOB, GPIO_PIN_0);
+  btn_init(&btn_select, GPIOA, GPIO_PIN_4);
+
+  leds_update_from_mode();
+}
+
+void app_tick_1khz(void)
+{
+  /* --- buttons: event-based, consistent --- */
+  if (btn_update_press_event(&btn_mode)) {
+    app_button_event();
+  }
+  if (btn_update_press_event(&btn_select)) {
+    g_sel_param ^= 1;
+    uart_println(g_sel_param ? "Select -> KI" : "Select -> KP");
+  }
+  if (btn_update_press_event(&btn_inc)) {
+    step_ref_or_gain(+0.05f);
+  }
+  if (btn_update_press_event(&btn_dec)) {
+    step_ref_or_gain(-0.05f);
+  }
+
+  leds_update_from_mode();
+
+  /* sanity */
+  if (!finite_f(g_uout) || !finite_f(g_i) ||
+      !finite_f(g_kp)  || !finite_f(g_ki) || !finite_f(g_ref) ||
+      g_uout > 20.0f || g_uout < -20.0f)
+  {
+    reset_control();
+    pwm_set(0.0f);
+    return;
+  }
+
+  if (g_mode == MODE_IDLE)
+  {
+    g_uin = 0.0f;
+    pwm_set(0.0f);
+
+    if (!g_bonus2_pwm_model) g_uout = plant_step(0.0f);
+
+    g_meas01 = 0.0f;
+    g_upwm_state = 0;
+    return;
+  }
+
+  if (g_mode == MODE_MOD)
+  {
+    float meas01;
+
+    if (g_bonus1_inverter)
+    {
+      /* signed mapping [-Y_FULL_SCALE..+Y_FULL_SCALE] -> [0..1] */
+      float y = g_uout;
+      meas01 = clamp01(0.5f + 0.5f * (y / Y_FULL_SCALE));
+    }
+    else
+    {
+      /* magnitude mapping */
+      float y = g_uout;
+      if (y < 0.0f) y = -y;
+      if (y > Y_FULL_SCALE) y = Y_FULL_SCALE;
+      meas01 = clamp01(y / Y_FULL_SCALE);
+    }
+
+    /* filter */
+    const float alpha = 0.02f;
+    g_meas_f += alpha * (meas01 - g_meas_f);
+    g_meas01 = g_meas_f;
+
+    /* reference */
+    float ref01 = g_ref;
+    if (g_bonus1_inverter) {
+      ref01 = inv_ref_step_01();
+      g_ref = ref01; /* show in status */
+    }
+
+    /* polarity decision for bonus2 */
+    g_pwm_polarity = (ref01 >= 0.5f) ? +1 : -1;
+
+    /* controller */
+    float u = pi_step(ref01, g_meas_f);
+    g_uin = u;
+    pwm_set(u);
+
+    if (!g_bonus2_pwm_model) {
+      g_uout = plant_step(u);
+    }
+    return;
+  }
+
+  /* MODE_CONFIG */
+  {
+    const float u = 0.10f;
+    g_uin = u;
+    pwm_set(u);
+
+    if (!g_bonus2_pwm_model) {
+      g_uout = plant_step(u);
+    }
+
+    float y = g_uout;
+    if (y < 0.0f) y = -y;
+    if (y > Y_FULL_SCALE) y = Y_FULL_SCALE;
+    g_meas01 = clamp01(y / Y_FULL_SCALE);
+  }
+}
+
+void app_button_event(void)
+{
+  reset_control();
+
+  if (g_mode == MODE_IDLE) {
+    g_mode = MODE_MOD;
+    g_uart_config_lock = 0;
+    uart_println("Mode -> MOD");
+  }
+  else if (g_mode == MODE_MOD) {
+    g_mode = MODE_CONFIG;
+    g_uart_config_lock = 1;
+    uart_println("Mode -> CONFIG");
+  }
+  else {
+    g_mode = MODE_IDLE;
+    g_uart_config_lock = 0;
+    uart_println("Mode -> IDLE");
+  }
+
+  leds_update_from_mode();
+}
+
+void app_cli_process_line(char *line)
+{
+  while (*line == ' ') line++;
+
+  size_t n = strlen(line);
+  while (n && (line[n-1] == '\r' || line[n-1] == '\n' || line[n-1] == ' '))
+    line[--n] = 0;
+
+  if (*line == '\0') return;
+
+  if (strcmp(line, "help") == 0) {
+    uart_println("help | status | mode idle|mod|cfg | kp <f> | ki <f> | ref <f> | bonus1 on|off | freq <f> | amp <f> | bonus2 on|off");
+    return;
+  }
+
+  if (strcmp(line, "status") == 0)
+  {
+    __disable_irq();
+    mode_t  m    = g_mode;
+    uint8_t lock = g_uart_config_lock;
+    float kp = g_kp, ki = g_ki, ref = g_ref, meas = g_meas01, uin = g_uin, uout = g_uout;
+    uint8_t b1 = g_bonus1_inverter;
+    uint8_t b2 = g_bonus2_pwm_model;
+    float f = g_inv_freq_hz, a = g_inv_amp01;
+    int upwm = (int)g_upwm_state;
+    int pol  = (int)g_pwm_polarity;
+    __enable_irq();
+
+    char buf[260];
+    snprintf(buf, sizeof(buf),
+      "mode=%s lock=%u kp=%.3f ki=%.3f ref=%.3f meas=%.3f uin=%.3f uout=%.3f bonus1=%u f=%.1f amp=%.2f bonus2=%u upwm=%d pol=%d",
+      mode_str(m), (unsigned)lock,
+      (double)kp, (double)ki, (double)ref, (double)meas, (double)uin, (double)uout,
+      (unsigned)b1, (double)f, (double)a,
+      (unsigned)b2, upwm, pol);
+    uart_println(buf);
+    return;
+  }
+
+  if (strncmp(line, "bonus2", 6) == 0)
+  {
+    char *arg = line + 6; while (*arg == ' ') arg++;
+    if (strncmp(arg, "on", 2) == 0)  { g_bonus2_pwm_model = 1; uart_println("OK bonus2 on"); return; }
+    if (strncmp(arg, "off", 3) == 0) { g_bonus2_pwm_model = 0; uart_println("OK bonus2 off"); return; }
+    uart_println("ERR bonus2 on|off");
+    return;
+  }
+
+  if (strncmp(line, "bonus1", 6) == 0)
+  {
+    char *arg = line + 6; while (*arg == ' ') arg++;
+    if (strncmp(arg, "on", 2) == 0)  { g_bonus1_inverter = 1; uart_println("OK bonus1 on"); return; }
+    if (strncmp(arg, "off", 3) == 0) { g_bonus1_inverter = 0; uart_println("OK bonus1 off"); return; }
+    uart_println("ERR bonus1 on|off");
+    return;
+  }
+
+  if (strncmp(line, "freq", 4) == 0)
+  {
+    char *arg = line + 4; while (*arg == ' ') arg++;
+    if (*arg == '\0') { uart_println("ERR missing value"); return; }
+    g_inv_freq_hz = (float)atof(arg);
+    uart_println("OK freq");
+    return;
+  }
+
+  if (strncmp(line, "amp", 3) == 0)
+  {
+    char *arg = line + 3; while (*arg == ' ') arg++;
+    if (*arg == '\0') { uart_println("ERR missing value"); return; }
+    g_inv_amp01 = (float)atof(arg);
+    if (g_inv_amp01 < 0.0f) g_inv_amp01 = 0.0f;
+    if (g_inv_amp01 > 0.49f) g_inv_amp01 = 0.49f;
+    uart_println("OK amp");
+    return;
+  }
+
+  if (strncmp(line, "mode", 4) == 0)
+  {
+    char *arg = line + 4; while (*arg == ' ') arg++;
+
+    reset_control();
+
+    if (strncmp(arg, "idle", 4) == 0) {
+      g_mode = MODE_IDLE; g_uart_config_lock = 0; uart_println("Mode -> IDLE"); leds_update_from_mode(); return;
+    }
+    if (strncmp(arg, "mod", 3) == 0) {
+      g_mode = MODE_MOD;  g_uart_config_lock = 0; uart_println("Mode -> MOD");  leds_update_from_mode(); return;
+    }
+    if (strncmp(arg, "cfg", 3) == 0) {
+      g_mode = MODE_CONFIG; g_uart_config_lock = 1; uart_println("Mode -> CONFIG"); leds_update_from_mode(); return;
+    }
+
+    uart_println("ERR mode arg");
+    return;
+  }
+
+  if (strncmp(line, "kp", 2) == 0)
+  {
+    char *arg = line + 2; while (*arg == ' ') arg++;
+    if (*arg == '\0') { uart_println("ERR missing value"); return; }
+    g_kp = (float)atof(arg); g_i = 0.0f; uart_println("OK kp"); return;
+  }
+
+  if (strncmp(line, "ki", 2) == 0)
+  {
+    char *arg = line + 2; while (*arg == ' ') arg++;
+    if (*arg == '\0') { uart_println("ERR missing value"); return; }
+    g_ki = (float)atof(arg); g_i = 0.0f; uart_println("OK ki"); return;
+  }
+
+  if (strncmp(line, "ref", 3) == 0)
+  {
+    char *arg = line + 3; while (*arg == ' ') arg++;
+    if (*arg == '\0') { uart_println("ERR missing value"); return; }
+    g_ref = clamp01((float)atof(arg)); g_i = 0.0f; uart_println("OK ref"); return;
+  }
+
+  uart_println("ERR unknown (type help)");
+}
