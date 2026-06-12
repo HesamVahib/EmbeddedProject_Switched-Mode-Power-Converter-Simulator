@@ -24,3 +24,4 @@ The application follows a polling-with-interrupts structure and separates applic
   - LED indicators for current operating mode
 - Protection of shared data using semaphore logic between UART and button inputs
 
+![Alt text](https://media.licdn.com/dms/image/v2/D4D2DAQEJOBQn6fvBDg/profile-treasury-image-shrink_8192_8192/B4DZwqNfO3HEAg-/0/1770234705511?e=1781856000&v=beta&t=4K48RfgKBe13XYC-K_qWdCF3uNhdkCVkWg-EZrHYpkQ)
