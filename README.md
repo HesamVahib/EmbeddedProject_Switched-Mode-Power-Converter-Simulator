@@ -1,6 +1,6 @@
 # Real-Time Switched-Mode Power Converter Simulator on STM32F4
 
-![Hardware setup]([figures/hardware_setup.jpg](https://media.licdn.com/dms/image/v2/D4D2DAQEJOBQn6fvBDg/profile-treasury-image-shrink_8192_8192/B4DZwqNfO3HEAg-/0/1770234705511?e=1781856000&v=beta&t=4K48RfgKBe13XYC-K_qWdCF3uNhdkCVkWg-EZrHYpkQ))
+![Hardware setup](https://media.licdn.com/dms/image/v2/D4D2DAQEJOBQn6fvBDg/profile-treasury-image-shrink_8192_8192/B4DZwqNfO3HEAg-/0/1770234705511?e=1781856000&v=beta&t=4K48RfgKBe13XYC-K_qWdCF3uNhdkCVkWg-EZrHYpkQ)
 
 ## Overview
 
